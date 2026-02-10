@@ -263,78 +263,106 @@ class GMBReader:
     def read_gmb(self):
         import struct
 
+        def read_string(f, max_len=256):
+            """读取字符串，尝试多种编码"""
+            try:
+                data = f.read(4)
+                if len(data) < 4:
+                    return None
+                str_len = struct.unpack("<I", data)[0]
+                if str_len == 0:
+                    return ""
+                if str_len > max_len:
+                    return None
+                data = f.read(str_len)
+                if len(data) < str_len:
+                    return None
+                for encoding in ["utf-8", "gbk", "latin1", "cp1252"]:
+                    try:
+                        return data.decode(encoding).strip("\x00")
+                    except:
+                        continue
+                return data.decode("utf-8", errors="ignore").strip("\x00")
+            except:
+                return None
+
         try:
             with open(self.filepath, "rb") as f:
+                # 读取文件头
                 header = f.read(10)
                 if header[:4] != b"GMDL":
                     raise ValueError("不是有效的GMB文件")
 
+                # 读取纹理
                 tex_num = struct.unpack("<I", f.read(4))[0]
                 for _ in range(tex_num):
-                    str_len = struct.unpack("<I", f.read(4))[0]
-                    tex_name = f.read(str_len).decode("utf-8")
-                    self.textures.append(tex_name)
+                    tex_name = read_string(f)
+                    if tex_name:
+                        self.textures.append(tex_name)
 
+                # 读取材质
                 shader_num = struct.unpack("<I", f.read(4))[0]
                 for _ in range(shader_num):
                     shader = {}
                     shader["tex_id"] = struct.unpack("<I", f.read(4))[0]
-                    str_len = struct.unpack("<I", f.read(4))[0]
-                    shader["tex_type"] = f.read(str_len).decode("utf-8")
+                    shader["tex_type"] = read_string(f)
                     shader["twoside"] = f.read(1)[0]
-                    str_len = struct.unpack("<I", f.read(4))[0]
-                    shader["blend"] = f.read(str_len).decode("utf-8")
+                    shader["blend"] = read_string(f)
                     shader["opaque"] = struct.unpack("<f", f.read(4))[0]
                     self.materials.append(shader)
 
+                # 读取对象数量
                 obj_num = struct.unpack("<I", f.read(4))[0]
+                # 跳过辅助数据
+                f.read(4)  # dummy_num
+                f.read(4)  # total_verts
+                f.read(4)  # total_faces
 
-                for _ in range(obj_num):
-                    str_len = struct.unpack("<I", f.read(4))[0]
-                    obj_name = f.read(str_len).decode("utf-8")
-
+                for obj_idx in range(obj_num):
                     obj = LXObject()
-                    obj.skin_name = obj_name
+                    obj.skin_name = read_string(f) or f"Object_{obj_idx}"
 
+                    # 读取顶点和面数量
                     vert_num = struct.unpack("<I", f.read(4))[0]
                     face_num = struct.unpack("<I", f.read(4))[0]
 
+                    # 读取顶点 (36字节每个)
                     for _ in range(vert_num):
-                        try:
-                            vx = struct.unpack("<f", f.read(4))[0]
-                            vy = struct.unpack("<f", f.read(4))[0]
-                            vz = struct.unpack("<f", f.read(4))[0]
-                            nx = struct.unpack("<f", f.read(4))[0]
-                            ny = struct.unpack("<f", f.read(4))[0]
-                            nz = struct.unpack("<f", f.read(4))[0]
-                            r = f.read(1)[0]
-                            g = f.read(1)[0]
-                            b = f.read(1)[0]
-                            a = f.read(1)[0]
-                            tu = struct.unpack("<f", f.read(4))[0]
-                            tv = struct.unpack("<f", f.read(4))[0]
+                        # 位置 (12字节)
+                        vx = struct.unpack("<f", f.read(4))[0]
+                        vy = struct.unpack("<f", f.read(4))[0]
+                        vz = struct.unpack("<f", f.read(4))[0]
+                        # 法线 (12字节)
+                        f.read(12)
+                        # 颜色 (4字节)
+                        f.read(4)
+                        # UV (8字节)
+                        tu = struct.unpack("<f", f.read(4))[0]
+                        tv = struct.unpack("<f", f.read(4))[0]
 
-                            obj.verts.append([vx, vy, vz])
-                            obj.uvs.append([tu, tv, 0, 0])
-                        except:
-                            break
+                        obj.verts.append([vx, vy, vz])
+                        obj.uvs.append([tu, tv, 0])
 
+                    # 读取面 (28字节每个)
+                    # 格式: 材质ID(long) + 3个顶点索引(long) + 3个法线float
                     for _ in range(face_num):
-                        try:
-                            mat_id = struct.unpack("<I", f.read(4))[0]
-                            v1 = struct.unpack("<I", f.read(4))[0]
-                            v2 = struct.unpack("<I", f.read(4))[0]
-                            v3 = struct.unpack("<I", f.read(4))[0]
+                        mat_id = struct.unpack("<I", f.read(4))[0]
+                        v1 = struct.unpack("<I", f.read(4))[0]
+                        v2 = struct.unpack("<I", f.read(4))[0]
+                        v3 = struct.unpack("<I", f.read(4))[0]
+                        # 跳过面法线 (12字节)
+                        f.read(12)
 
-                            obj.face_mat.append(mat_id)
-                            obj.faces.append([v1, v2, v3])
-                        except:
-                            break
+                        obj.face_mat.append(mat_id)
+                        obj.faces.append([v1, v2, v3])
 
                     self.objects.append(obj)
 
-            return self.objects, self.materials, self.textures
+                return self.objects, self.materials, self.textures
         except Exception as e:
+            import traceback
+
+            traceback.print_exc()
             raise Exception(f"读取GMB文件失败: {e}")
 
 

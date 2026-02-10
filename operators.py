@@ -125,6 +125,7 @@ class GMC_OT_import(bpy.types.Operator):
     filter_glob: bpy.props.StringProperty(default="*.gmb;*.gmc", options={"HIDDEN"})
 
     def execute(self, context):
+        print(f"[LX] 开始导入GMB/GMC: {self.filepath}")
         try:
             ext = os.path.splitext(self.filepath)[1].lower()
 
@@ -132,16 +133,33 @@ class GMC_OT_import(bpy.types.Operator):
                 from . import import_utils
 
                 reader = import_utils.GMBReader(self.filepath)
-                objects, materials, textures = reader.read_gmb()
+                result = reader.read_gmb()
+                print(f"[LX] GMB读取结果类型: {type(result)}")
+                if isinstance(result, tuple) and len(result) == 3:
+                    objects, materials, textures = result
+                else:
+                    objects = result
+                    materials = []
+                    textures = []
             else:
                 from . import import_utils
 
                 reader = import_utils.GMCReader(self.filepath)
                 objects, materials, textures = reader.read_gmc()
 
+            print(f"[LX] 对象数量: {len(objects)}")
+
             bpy.ops.object.select_all(action="DESELECT")
 
-            for obj_data in objects:
+            for idx, obj_data in enumerate(objects):
+                print(f"[LX] 处理对象 {idx}: {obj_data.skin_name}")
+                print(
+                    f"[LX]   verts: {len(obj_data.verts)}, faces: {len(obj_data.faces)}"
+                )
+                print(f"[LX]   faces类型: {type(obj_data.faces)}")
+                if len(obj_data.faces) > 0:
+                    print(f"[LX]   第一个面: {obj_data.faces[0]}")
+
                 if len(obj_data.verts) == 0:
                     continue
 
@@ -156,6 +174,9 @@ class GMC_OT_import(bpy.types.Operator):
             return {"FINISHED"}
 
         except Exception as e:
+            import traceback
+
+            traceback.print_exc()
             self.report({"ERROR"}, f"导入失败: {str(e)}")
             return {"CANCELLED"}
 
