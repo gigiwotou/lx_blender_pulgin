@@ -69,14 +69,10 @@ class SKCReader:
                             parts_vtx = line_v.split()
                             if len(parts_vtx) >= 7:
                                 try:
-                                    # 3dsmax坐标系转换: Y-up, Z-forward
-                                    # Blender坐标系: Z-up, Y-forward
-                                    # 需要交换 Y 和 Z
                                     x = float(parts_vtx[1])
                                     y = float(parts_vtx[2])
                                     z = float(parts_vtx[3])
-
-                                    obj.verts.append([x, z, y])  # 交换 Y 和 Z
+                                    obj.verts.append([x, y, z])
                                     obj.uvs.append([float(parts_vtx[5]), 0, 0])
                                 except:
                                     pass
@@ -88,19 +84,16 @@ class SKCReader:
 
                         if line_f.startswith("f "):
                             parts_f = line_f.split()
-                            if len(parts_f) >= 5:
+                            # SKC格式: f mat_id v1 v2 v3 ...
+                            # 3dsmax脚本: subline[4], [5], [6] (1-based)
+                            # Python中: parts_f[3], [4], [5] (0-based)
+                            if len(parts_f) >= 6:
                                 try:
-                                    v1 = int(parts_f[2]) - 1
-                                    v2 = int(parts_f[3]) - 1
-                                    v3 = int(parts_f[4]) - 1
-
-                                    if len(parts_f) >= 6:
-                                        v4 = int(parts_f[5]) - 1
-                                        # 尝试不同的面顺序
-                                        obj.faces.append([v2, v1, v3])  # 变体1
-                                        obj.faces.append([v2, v3, v4])
-                                    else:
-                                        obj.faces.append([v2, v1, v3])
+                                    # 取顶点索引 (0-based)
+                                    v1 = int(parts_f[3])
+                                    v2 = int(parts_f[4])
+                                    v3 = int(parts_f[5])
+                                    obj.faces.append([v1, v2, v3])
                                 except:
                                     pass
 
