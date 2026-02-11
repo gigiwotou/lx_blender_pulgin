@@ -57,22 +57,6 @@ class SKC_OT_import(bpy.types.Operator):
 
             bpy.ops.object.select_all(action="DESELECT")
 
-            mesh = bpy.data.meshes.new(obj_data.skin_name)
-            mesh.from_pydata(obj_data.verts, [], obj_data.faces)
-            mesh.update()
-
-            obj = bpy.data.objects.new(obj_data.skin_name, mesh)
-            bpy.context.collection.objects.link(obj)
-            obj.select_set(True)
-
-            print(f"[LX] 导入成功!")
-            self.report(
-                {"INFO"}, f"成功导入: {obj_data.skin_name} ({len(obj_data.verts)} 顶点)"
-            )
-            return {"FINISHED"}
-
-            bpy.ops.object.select_all(action="DESELECT")
-
             for obj_data in objects:
                 if len(obj_data.verts) == 0:
                     continue
@@ -84,19 +68,29 @@ class SKC_OT_import(bpy.types.Operator):
                 mesh.from_pydata(obj_data.verts, [], obj_data.faces)
                 mesh.update()
 
+                # 启用平滑着色
+                for poly in mesh.polygons:
+                    poly.use_smooth = True
+
+                mesh.update()
+
                 obj = bpy.data.objects.new(obj_data.skin_name, mesh)
                 bpy.context.collection.objects.link(obj)
                 obj.select_set(True)
 
-                if len(obj_data.uvs) > 0:
+                # 设置UV（修复：正确映射到面而不是顶点）
+                if len(obj_data.uvs) > 0 and len(obj_data.faces) > 0:
                     uv_layer = mesh.uv_layers.new(name="UV")
-                    for poly in mesh.polygons:
-                        for loop_index in poly.loop_indices:
-                            vert_idx = mesh.loops[loop_index].vertex_index
-                            if vert_idx < len(obj_data.uvs):
-                                uv_layer.data[loop_index].uv = obj_data.uvs[vert_idx][
-                                    :2
-                                ]
+                    # 遍历每个面，为每个面的顶点设置UV
+                    for face_idx, face in enumerate(obj_data.faces):
+                        if face_idx < len(mesh.polygons):
+                            poly = mesh.polygons[face_idx]
+                            for loop_i, loop_idx in enumerate(poly.loop_indices):
+                                if loop_i < len(face):
+                                    vert_idx = face[loop_i]
+                                    if vert_idx < len(obj_data.uvs):
+                                        uv = obj_data.uvs[vert_idx]
+                                        uv_layer.data[loop_idx].uv = (uv[0], uv[1])
 
             self.report({"INFO"}, f"成功导入 {len(objects)} 个模型对象")
             return {"FINISHED"}
@@ -165,6 +159,12 @@ class GMC_OT_import(bpy.types.Operator):
 
                 mesh = bpy.data.meshes.new(obj_data.skin_name)
                 mesh.from_pydata(obj_data.verts, [], obj_data.faces)
+                mesh.update()
+
+                # 启用平滑着色
+                for poly in mesh.polygons:
+                    poly.use_smooth = True
+
                 mesh.update()
 
                 obj = bpy.data.objects.new(obj_data.skin_name, mesh)
