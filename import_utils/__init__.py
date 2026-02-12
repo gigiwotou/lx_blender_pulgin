@@ -1,5 +1,5 @@
 import os
-from typing import List
+from typing import List, Dict, Tuple
 
 
 class LXObject:
@@ -10,6 +10,202 @@ class LXObject:
         self.uvs = []
         self.mats = []
         self.face_mat = []
+        # 骨骼权重数据
+        self.bone_v_count = []  # 每个顶点受影响的骨骼数量
+        self.bone_ids = []  # 每个顶点的骨骼ID列表
+        self.weight_array = []  # 每个顶点的权重列表
+
+
+class LXBone:
+    """骨骼数据结构"""
+
+    def __init__(self):
+        self.bone_name = ""
+        self.bone_id = 0
+        self.parent_name = ""
+        self.parent_id = -1
+        self.vpos = [0.0, 0.0, 0.0]  # 位置
+        self.vrot = [0.0, 0.0, 0.0, 1.0]  # 四元数旋转 (w, x, y, z)
+        self.children = 0
+        self.bone_type = 1  # 1=bone, 2=dummey
+
+
+class BNCReader:
+    """BNC骨骼文件读取器"""
+
+    def __init__(self, filepath: str):
+        self.filepath = filepath
+        self.bones: List[LXBone] = []
+        self.bone_count = 0
+        self.dummey_count = 0
+
+    def read_bnc(self) -> Tuple[List[LXBone], int, int]:
+        """读取BNC文件，返回(骨骼列表, 骨骼数, 虚拟体数)"""
+        print(f"[BNC] 开始读取BNC文件: {self.filepath}")
+
+        try:
+            with open(self.filepath, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            print(f"[BNC] 使用UTF-8编码读取，共 {len(lines)} 行")
+        except Exception as e:
+            print(f"[BNC] UTF-8读取失败: {e}，尝试GBK编码")
+            with open(self.filepath, "r", encoding="gbk") as f:
+                lines = f.readlines()
+            print(f"[BNC] 使用GBK编码读取，共 {len(lines)} 行")
+
+        i = 0
+        # 读取骨骼数量
+        print("[BNC] 开始查找骨骼数量...")
+        while i < len(lines):
+            line = lines[i].strip()
+            if line.startswith("#"):
+                i += 1
+                continue
+            if line.startswith("Bones:"):
+                parts = line.split()
+                print(f"[BNC] 找到骨骼数量行: {line}")
+                if len(parts) >= 4:
+                    self.bone_count = int(parts[1])
+                    self.dummey_count = int(parts[3])
+                    print(
+                        f"[BNC] 骨骼数: {self.bone_count}, 虚拟体数: {self.dummey_count}"
+                    )
+                i += 1
+                break
+            i += 1
+
+        # 读取每个骨骼
+        print("[BNC] 开始读取骨骼数据...")
+        bone_count = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            if line.startswith("#") or not line:
+                i += 1
+                continue
+
+            if line.startswith("bone ") or line.startswith("Dummey "):
+                bone_count += 1
+                bone = LXBone()
+                parts = line.split()
+                if len(parts) >= 2:
+                    bone.bone_name = parts[1]
+                    bone.bone_type = 1 if line.startswith("bone ") else 2
+                    print(
+                        f"[BNC] 读取骨骼[{bone_count}]: {bone.bone_name}, 类型: {'bone' if bone.bone_type == 1 else 'Dummey'}"
+                    )
+
+                # 读取骨骼块内容
+                i += 1
+                while i < len(lines):
+                    inner_line = lines[i].strip()
+                    if inner_line == "}":
+                        i += 1
+                        break
+
+                    inner_parts = inner_line.split()
+                    if len(inner_parts) >= 2:
+                        key = inner_parts[0]
+                        if key == "parent":
+                            bone.parent_name = inner_parts[1]
+                        elif key == "pivot":
+                            bone.vpos = [
+                                float(inner_parts[1]),
+                                float(inner_parts[2]),
+                                float(inner_parts[3]),
+                            ]
+                        elif key == "quaternion":
+                            # BNC文件格式: w x y z (4个浮点数)
+                            # 3dsmax中: quat x y z w
+                            # Blender中: Quaternion((w, x, y, z))
+                            # 所以BNC的 [w, x, y, z] 直接对应 Blender的 (w, x, y, z)
+                            w = float(inner_parts[1])
+                            x = float(inner_parts[2])
+                            y = float(inner_parts[3])
+                            z = float(inner_parts[4])
+                            bone.vrot = [
+                                w,
+                                x,
+                                y,
+                                z,
+                            ]  # 存储为 [w, x, y, z] 供Blender使用
+                        elif key == "children":
+                            bone.children = int(inner_parts[1])
+
+                    i += 1
+
+                self.bones.append(bone)
+            else:
+                i += 1
+
+        print(f"[BNC] 共读取 {len(self.bones)} 块骨骼")
+
+        # 建立父子关系
+        print("[BNC] 建立父子关系...")
+
+        # 首先按类型分组统计
+        bone_count = sum(1 for b in self.bones if b.bone_type == 1)
+        dummey_count = sum(1 for b in self.bones if b.bone_type == 2)
+        print(f"[BNC] 骨骼数量: {bone_count}, 虚拟体数量: {dummey_count}")
+
+        for bone in self.bones:
+            if bone.parent_name and bone.parent_name != "NULL":
+                parent_found = False
+
+                # 特殊处理：虚拟体（dummey）的parentName格式可能是 b数字 或 d数字
+                if bone.bone_type == 2 and len(bone.parent_name) >= 2:
+                    prefix = bone.parent_name[0]
+                    rest = bone.parent_name[1:]
+
+                    if prefix == "b" and rest.isdigit():
+                        # b13 格式：表示第13块骨骼（从0开始的索引）
+                        # 注意：3dsmax中索引从0开始，所以 b13 就是第13块（索引13）
+                        bone_idx = int(rest)
+                        if bone_idx < len(self.bones):
+                            bone.parent_id = bone_idx
+                            bone.parent_name = self.bones[bone_idx].bone_name
+                            parent_found = True
+                            print(
+                                f"[BNC] {bone.bone_name} 的父级是 {bone.parent_name} (索引b{rest})"
+                            )
+
+                    elif prefix == "d" and rest.isdigit():
+                        # d3 格式：表示第3个虚拟体
+                        # 虚拟体在数组中的实际索引 = 骨骼数 + 虚拟体序号
+                        dummey_idx = int(rest)
+                        actual_idx = bone_count + dummey_idx
+                        if actual_idx < len(self.bones):
+                            bone.parent_id = actual_idx
+                            bone.parent_name = self.bones[actual_idx].bone_name
+                            parent_found = True
+                            print(
+                                f"[BNC] {bone.bone_name} 的父级是 {bone.parent_name} (索引d{rest} = ID {actual_idx})"
+                            )
+
+                # 如果不是虚拟体的特殊格式，或特殊格式处理失败，则用名称匹配
+                if not parent_found:
+                    for idx, parent_bone in enumerate(self.bones):
+                        if parent_bone.bone_name == bone.parent_name:
+                            bone.parent_id = idx
+                            parent_found = True
+                            print(
+                                f"[BNC] {bone.bone_name} 的父级是 {bone.parent_name} (名称匹配 ID: {idx})"
+                            )
+                            break
+
+                if not parent_found:
+                    # 父骨骼未找到
+                    print(
+                        f"[BNC] 警告: {bone.bone_name} 的父骨骼 '{bone.parent_name}' 未找到，作为根骨骼处理"
+                    )
+                    bone.parent_name = "NULL"
+
+        print(f"[BNC] BNC文件读取完成，返回 {len(self.bones)} 块骨骼")
+        return self.bones, self.bone_count, self.dummey_count
+
+
+def read_bnc(filepath: str) -> Tuple[List[LXBone], int, int]:
+    reader = BNCReader(filepath)
+    return reader.read_bnc()
 
 
 class SKCReader:
@@ -73,7 +269,39 @@ class SKCReader:
                                     y = float(parts_vtx[2])
                                     z = float(parts_vtx[3])
                                     obj.verts.append([x, y, z])
-                                    obj.uvs.append([float(parts_vtx[5]), 0, 0])
+                                    obj.uvs.append(
+                                        [float(parts_vtx[5]), float(parts_vtx[6]), 0]
+                                    )
+
+                                    # 解析骨骼权重
+                                    # 格式: v x y z vt u v Bones N bone_id weight ...
+                                    if "Bones" in parts_vtx:
+                                        bones_idx = parts_vtx.index("Bones")
+                                        if bones_idx + 1 < len(parts_vtx):
+                                            bone_count = int(parts_vtx[bones_idx + 1])
+                                            obj.bone_v_count.append(bone_count)
+
+                                            vert_bone_ids = []
+                                            vert_weights = []
+
+                                            for b in range(bone_count):
+                                                idx = bones_idx + 2 + b * 2
+                                                if idx + 1 < len(parts_vtx):
+                                                    bone_id = int(parts_vtx[idx])
+                                                    weight = float(parts_vtx[idx + 1])
+                                                    vert_bone_ids.append(bone_id)
+                                                    vert_weights.append(weight)
+
+                                            obj.bone_ids.append(vert_bone_ids)
+                                            obj.weight_array.append(vert_weights)
+                                        else:
+                                            obj.bone_v_count.append(0)
+                                            obj.bone_ids.append([])
+                                            obj.weight_array.append([])
+                                    else:
+                                        obj.bone_v_count.append(0)
+                                        obj.bone_ids.append([])
+                                        obj.weight_array.append([])
                                 except:
                                     pass
 
